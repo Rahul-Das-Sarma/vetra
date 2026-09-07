@@ -41,6 +41,7 @@ export default function DossierDetailPage() {
   const addSource = useVetraStore((s) => s.addSource);
   const setStep = useVetraStore((s) => s.setStep);
   const generateDraft = useVetraStore((s) => s.generateDraft);
+  const applyGeneratedDraft = useVetraStore((s) => s.applyGeneratedDraft);
   const updateSection = useVetraStore((s) => s.updateSection);
   const resolveQaIssue = useVetraStore((s) => s.resolveQaIssue);
   const approveDossier = useVetraStore((s) => s.approveDossier);
@@ -50,6 +51,11 @@ export default function DossierDetailPage() {
   const [sourceName, setSourceName] = useState("");
   const [sourcePreview, setSourcePreview] = useState("");
   const [exportMessage, setExportMessage] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [ingestError, setIngestError] = useState("");
+  const [parsingFile, setParsingFile] = useState(false);
 
   const mandate = useMemo(
     () => mandates.find((m) => m.id === dossier?.mandateId),
@@ -64,7 +70,7 @@ export default function DossierDetailPage() {
     return (
       <div className="mx-auto max-w-xl space-y-4 py-16 text-center">
         <h1 className="text-xl font-semibold">Dossier not found</h1>
-        <Button render={<Link href="/dossiers" />}>Back to dossiers</Button>
+        <Button render={<Link href="/dossiers" />} nativeButton={false}>Back to dossiers</Button>
       </div>
     );
   }
@@ -97,16 +103,105 @@ export default function DossierDetailPage() {
     setSourcePreview("");
   }
 
-  function runGenerate() {
-    generateDraft(dossier!.id);
-    setStep(dossier!.id, "review");
+  async function runGenerate() {
+    if (!dossier) return;
+    setGenerating(true);
+    setGenerateError("");
+    setStep(dossier.id, "extract");
+
+    try {
+      const res = await fetch("/api/dossiers/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateName: dossier.candidateName,
+          targetRole: dossier.targetRole,
+          client: dossier.client,
+          templateName: template?.name,
+          templateSections: template?.sections ?? [],
+          toneNotes: template?.toneNotes,
+          mandateTitle: mandate?.title,
+          mandateCriteria: mandate?.criteria.map((c) => ({
+            label: c.label,
+            type: c.type,
+          })),
+          sources: dossier.sources.map((s) => ({
+            kind: s.kind,
+            name: s.name,
+            content: s.contentPreview,
+          })),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Generation failed");
+      }
+
+      applyGeneratedDraft(dossier.id, {
+        claims: data.draft.claims,
+        sections: data.draft.sections,
+        qaIssues: data.draft.qaIssues,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Generation failed";
+      setGenerateError(`${message} Falling back to mock draft.`);
+      generateDraft(dossier.id);
+    } finally {
+      setGenerating(false);
+    }
   }
 
-  function handleExport(format: "docx" | "pdf") {
-    markExported(dossier!.id);
-    setExportMessage(
-      `${format.toUpperCase()} export recorded (demo). Secure web link comes later.`
-    );
+  async function handleExport(format: "docx" | "pdf") {
+    if (!dossier) return;
+    if (dossier.sections.length === 0) {
+      setExportMessage("Generate and review a draft before exporting.");
+      return;
+    }
+    setExporting(true);
+    setExportMessage("");
+    try {
+      const { downloadDossierExport } = await import("@/lib/export/download");
+      await downloadDossierExport({
+        format,
+        dossier,
+        templateName: template?.name,
+        mandateTitle: mandate?.title,
+      });
+      markExported(dossier.id);
+      setExportMessage(`${format.toUpperCase()} downloaded.`);
+    } catch (err) {
+      setExportMessage(
+        err instanceof Error ? err.message : "Export failed"
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !dossier) return;
+    setParsingFile(true);
+    setIngestError("");
+    try {
+      const { extractTextFromFile } = await import("@/lib/ingest/extract-text");
+      const text = await extractTextFromFile(file);
+      if (!text) {
+        throw new Error("No text extracted from file.");
+      }
+      addSource(dossier.id, {
+        kind: sourceKind,
+        name: file.name,
+        contentPreview: text.slice(0, 50000),
+      });
+    } catch (err) {
+      setIngestError(err instanceof Error ? err.message : "File parse failed");
+    } finally {
+      setParsingFile(false);
+    }
   }
 
   return (
@@ -133,17 +228,21 @@ export default function DossierDetailPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" render={<Link href="/dossiers" />}>
+          <Button variant="outline" render={<Link href="/dossiers" />} nativeButton={false}>
             All dossiers
           </Button>
-          {(dossier.step === "ingest" || dossier.step === "extract" || dossier.step === "evidence" || dossier.step === "draft") && (
-            <Button onClick={runGenerate}>
-              <Sparkles data-icon="inline-start" />
-              Generate draft
-            </Button>
-          )}
+          <Button onClick={runGenerate} disabled={generating}>
+            <Sparkles data-icon="inline-start" />
+            {generating ? "Generating…" : "Generate draft"}
+          </Button>
         </div>
       </div>
+
+      {generateError ? (
+        <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[13px] text-destructive">
+          {generateError}
+        </p>
+      ) : null}
 
       <WorkflowStepper
         current={dossier.step}
@@ -168,8 +267,8 @@ export default function DossierDetailPage() {
               <CardHeader>
                 <CardTitle>Upload sources</CardTitle>
                 <CardDescription>
-                  CV/PDF/DOCX, screening transcript/audio, recruiter notes. Demo
-                  stores text previews locally.
+                  Upload PDF/DOCX/TXT or paste text. Parsed text is stored locally
+                  for generation.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -187,6 +286,24 @@ export default function DossierDetailPage() {
                       <option value="notes">Recruiter notes</option>
                       <option value="mandate">Mandate excerpt</option>
                     </select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="file-upload">Upload file</Label>
+                    <Input
+                      id="file-upload"
+                      type="file"
+                      accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                      onChange={handleFileSelected}
+                      disabled={parsingFile}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      {parsingFile
+                        ? "Extracting text…"
+                        : "PDF, DOCX, or TXT. Or paste below."}
+                    </p>
+                    {ingestError ? (
+                      <p className="text-[12px] text-destructive">{ingestError}</p>
+                    ) : null}
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="filename">File / label</Label>
@@ -502,19 +619,27 @@ export default function DossierDetailPage() {
                   variant="outline"
                   className="justify-start"
                   onClick={() => handleExport("docx")}
-                  disabled={dossier.status === "draft" || dossier.status === "extracting"}
+                  disabled={
+                    exporting ||
+                    dossier.sections.length === 0 ||
+                    dossier.status === "extracting"
+                  }
                 >
                   <Download data-icon="inline-start" />
-                  Export DOCX
+                  {exporting ? "Exporting…" : "Export DOCX"}
                 </Button>
                 <Button
                   variant="outline"
                   className="justify-start"
                   onClick={() => handleExport("pdf")}
-                  disabled={dossier.status === "draft" || dossier.status === "extracting"}
+                  disabled={
+                    exporting ||
+                    dossier.sections.length === 0 ||
+                    dossier.status === "extracting"
+                  }
                 >
                   <Download data-icon="inline-start" />
-                  Export PDF
+                  {exporting ? "Exporting…" : "Export PDF"}
                 </Button>
               </div>
               {exportMessage && (

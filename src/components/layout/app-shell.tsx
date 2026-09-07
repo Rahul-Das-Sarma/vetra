@@ -11,6 +11,7 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
+import { AuthHeaderControls } from "@/components/layout/auth-header";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -23,6 +24,12 @@ const NAV = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const isAuthPage =
+    pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
+
+  if (isAuthPage) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -89,9 +96,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="spott-chip bg-success text-success-foreground">
               Pilot
             </span>
-            <div className="flex size-7 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
-              Y
-            </div>
+            <AuthHeaderControls />
           </div>
         </header>
         <main className="flex-1 px-5 py-5">{children}</main>

@@ -45,6 +45,14 @@ interface VetraState {
   setStep: (id: string, step: WorkflowStep) => void;
   addSource: (dossierId: string, source: Omit<UploadedSource, "id" | "uploadedAt">) => void;
   generateDraft: (dossierId: string) => void;
+  applyGeneratedDraft: (
+    dossierId: string,
+    payload: {
+      claims: Omit<EvidenceClaim, "id">[];
+      sections: Omit<DossierSection, "id">[];
+      qaIssues: Omit<QaIssue, "id" | "resolved">[];
+    }
+  ) => void;
   updateSection: (dossierId: string, sectionId: string, content: string) => void;
   resolveQaIssue: (dossierId: string, issueId: string) => void;
   approveDossier: (dossierId: string) => void;
@@ -53,6 +61,20 @@ interface VetraState {
   upsertTemplate: (template: FirmTemplate) => void;
   setRetention: (policy: RetentionPolicy) => void;
   log: (event: Omit<AuditEvent, "id" | "createdAt">) => void;
+  hydrateFromCloud: (workspace: {
+    dossiers: CandidateDossier[];
+    mandates: SearchMandate[];
+    templates: FirmTemplate[];
+    auditLog: AuditEvent[];
+    retention: RetentionPolicy;
+  }) => void;
+  getSnapshot: () => {
+    dossiers: CandidateDossier[];
+    mandates: SearchMandate[];
+    templates: FirmTemplate[];
+    auditLog: AuditEvent[];
+    retention: RetentionPolicy;
+  };
 }
 
 const STEP_STATUS: Record<WorkflowStep, CandidateDossier["status"]> = {
@@ -154,56 +176,76 @@ export const useVetraStore = create<VetraState>()(
       },
 
       generateDraft: (dossierId) => {
+        // Offline/mock fallback when API is unavailable
         const dossier = get().dossiers.find((d) => d.id === dossierId);
         const template = get().templates.find((t) => t.id === dossier?.templateId);
         if (!dossier || !template) return;
 
-        const claims: EvidenceClaim[] = [
-          {
-            id: id("cl"),
-            claim: `${dossier.candidateName} is being presented for ${dossier.targetRole}.`,
-            section: template.sections[0] ?? "Executive Summary",
-            supported: true,
-            sources: dossier.sources.slice(0, 1).map((s) => ({
-              kind: s.kind,
-              label: s.name,
-              excerpt: s.contentPreview.slice(0, 120),
-            })),
-          },
-          {
-            id: id("cl"),
-            claim: "Material compensation or motivation details require recruiter confirmation.",
-            section: "Compensation & Notice",
-            supported: false,
-            flaggedReason: "Insufficient source coverage in uploaded materials.",
-            sources: [],
-          },
-        ];
+        get().applyGeneratedDraft(dossierId, {
+          claims: [
+            {
+              claim: `${dossier.candidateName} is being presented for ${dossier.targetRole}.`,
+              section: template.sections[0] ?? "Executive Summary",
+              supported: dossier.sources.length > 0,
+              sources: dossier.sources.slice(0, 1).map((s) => ({
+                kind: s.kind,
+                label: s.name,
+                excerpt: s.contentPreview.slice(0, 120),
+              })),
+              flaggedReason:
+                dossier.sources.length === 0
+                  ? "No sources uploaded for mock generation."
+                  : undefined,
+            },
+            {
+              claim:
+                "Material compensation or motivation details require recruiter confirmation.",
+              section: "Compensation & Notice",
+              supported: false,
+              flaggedReason: "Insufficient source coverage in uploaded materials.",
+              sources: [],
+            },
+          ],
+          sections: template.sections.map((title, index) => ({
+            title,
+            content:
+              index === 0
+                ? `${dossier.candidateName} — mock draft for ${dossier.targetRole} (${dossier.client}). Use Generate with OPENAI_API_KEY for real AI.`
+                : `[Mock draft] Populate from sources. Tone: ${template.toneNotes}`,
+          })),
+          qaIssues: [
+            {
+              severity: "warning",
+              message:
+                "Mock draft only. Add OPENAI_API_KEY and regenerate for source-grounded AI output.",
+            },
+            {
+              severity: "error",
+              message: "At least one claim lacks source evidence.",
+              section: "Compensation & Notice",
+            },
+          ],
+        });
+      },
 
-        const sections: DossierSection[] = template.sections.map((title, index) => ({
-          id: id("sec"),
-          title,
-          content:
-            index === 0
-              ? `${dossier.candidateName} — draft dossier for ${dossier.targetRole} (${dossier.client}). Generated in firm template “${template.name}”. Recruiter judgment required before client release.`
-              : `[Draft] Populate from sources. Tone: ${template.toneNotes}`,
+      applyGeneratedDraft: (dossierId, payload) => {
+        const dossier = get().dossiers.find((d) => d.id === dossierId);
+        const template = get().templates.find((t) => t.id === dossier?.templateId);
+        if (!dossier) return;
+
+        const claims: EvidenceClaim[] = payload.claims.map((c) => ({
+          ...c,
+          id: id("cl"),
         }));
-
-        const qaIssues: QaIssue[] = [
-          {
-            id: id("qa"),
-            severity: "warning",
-            message: "Draft generated from limited sources. Complete evidence review before approval.",
-            resolved: false,
-          },
-          {
-            id: id("qa"),
-            severity: "error",
-            message: "At least one claim lacks source evidence.",
-            section: "Compensation & Notice",
-            resolved: false,
-          },
-        ];
+        const sections: DossierSection[] = payload.sections.map((s) => ({
+          ...s,
+          id: id("sec"),
+        }));
+        const qaIssues: QaIssue[] = payload.qaIssues.map((q) => ({
+          ...q,
+          id: id("qa"),
+          resolved: false,
+        }));
 
         get().updateDossier(dossierId, {
           claims,
@@ -217,7 +259,9 @@ export const useVetraStore = create<VetraState>()(
           actor: "you@vetra.app",
           entityType: "dossier",
           entityId: dossierId,
-          detail: `Template: ${template.name}`,
+          detail: template
+            ? `Template: ${template.name}`
+            : "AI / mock generation",
         });
       },
 
@@ -322,6 +366,30 @@ export const useVetraStore = create<VetraState>()(
           entityId: "retention",
           detail: `${policy.retainDays} days; no training on customer data`,
         });
+      },
+
+      hydrateFromCloud: (workspace) => {
+        set({
+          dossiers: workspace.dossiers,
+          mandates: workspace.mandates,
+          templates: workspace.templates,
+          auditLog: workspace.auditLog,
+          retention: {
+            ...workspace.retention,
+            trainOnCustomerData: false,
+          },
+        });
+      },
+
+      getSnapshot: () => {
+        const s = get();
+        return {
+          dossiers: s.dossiers,
+          mandates: s.mandates,
+          templates: s.templates,
+          auditLog: s.auditLog,
+          retention: s.retention,
+        };
       },
     }),
     { name: "vetra-store" }

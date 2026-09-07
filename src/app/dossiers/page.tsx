@@ -24,7 +24,7 @@ export default function DossiersPage() {
             <LayoutList className="mr-1 size-3" />
             List
           </span>
-          <Button render={<Link href="/dossiers/new" />}>
+          <Button render={<Link href="/dossiers/new" />} nativeButton={false}>
             <FilePlus2 data-icon="inline-start" />
             New dossier
           </Button>

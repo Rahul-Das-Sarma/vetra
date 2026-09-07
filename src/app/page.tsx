@@ -38,7 +38,7 @@ export default function DashboardPage() {
             See what needs action across dossiers, evidence and approvals.
           </p>
         </div>
-        <Button render={<Link href="/dossiers/new" />}>
+        <Button render={<Link href="/dossiers/new" />} nativeButton={false}>
           <FilePlus2 data-icon="inline-start" />
           New dossier
         </Button>

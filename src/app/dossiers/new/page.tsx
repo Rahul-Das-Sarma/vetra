@@ -137,7 +137,7 @@ export default function NewDossierPage() {
             </div>
           </CardContent>
           <CardFooter className="justify-end gap-2 border-t">
-            <Button variant="outline" render={<Link href="/dossiers" />}>
+            <Button variant="outline" render={<Link href="/dossiers" />} nativeButton={false}>
               Cancel
             </Button>
             <Button type="submit">Create & continue to ingest</Button>

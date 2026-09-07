@@ -1,6 +1,10 @@
+import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import { Source_Sans_3, IBM_Plex_Mono } from "next/font/google";
 import { AppShell } from "@/components/layout/app-shell";
+import { AuthProvider } from "@/components/providers/auth-provider";
+import { CloudSyncBanner } from "@/components/providers/cloud-sync";
+import { clerkAppearance } from "@/lib/clerk-appearance";
 import "./globals.css";
 
 const sourceSans = Source_Sans_3({
@@ -28,7 +32,17 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${sourceSans.variable} ${ibmPlexMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col font-sans">
-        <AppShell>{children}</AppShell>
+        <ClerkProvider
+          publishableKey={process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+          appearance={clerkAppearance}
+        >
+          <AuthProvider>
+            <AppShell>
+              <CloudSyncBanner />
+              {children}
+            </AppShell>
+          </AuthProvider>
+        </ClerkProvider>
       </body>
     </html>
   );
